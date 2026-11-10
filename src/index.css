@@ -1,0 +1,18 @@
+:root {
+  font-family: 'Nunito Variable', system-ui, sans-serif;
+  font-size: 14px;
+  font-weight: 600;
+  color-scheme: light dark;
+}
+
+button,
+input,
+select,
+textarea {
+  font-family: inherit;
+  font-weight: inherit;
+}
+
+body {
+  margin: 0;
+}
