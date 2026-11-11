@@ -437,6 +437,22 @@ export default function App() {
     setFen(gameRef.current.fen())
   }
 
+  function exitReview() {
+    if (!review) return
+    // Keep the current position; the moves not yet reached can be replayed with Redo.
+    setRedoStack(
+      review.moves
+        .slice(ply)
+        .reverse()
+        .map((m) => ({ from: m.from, to: m.to, promotion: m.promotion })),
+    )
+    setReview(null)
+    setSelected(null)
+    setHintFen(null)
+    setOptionsFen(null)
+    setOptPick(null)
+  }
+
   function openReview(text: string) {
     const g = new Chess()
     try {
@@ -1060,7 +1076,7 @@ export default function App() {
                     >
                       »
                     </button>
-                    <button onClick={() => newGame(player)}>Exit review</button>
+                    <button onClick={exitReview}>Exit review</button>
                   </div>
                 </div>
               )}
