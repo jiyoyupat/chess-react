@@ -163,6 +163,7 @@ export default function App() {
   const sideRef = useRef<HTMLDivElement>(null)
   const plies = useRef(0) // number of moves already played, to detect new moves
   const [mute, setMute] = useState(isMuted())
+  const [flip, setFlip] = useState(false)
   const [training, setTraining] = useState<{ line: number; mistakes: number } | null>(null)
   const [pick, setPick] = useState(0) // opening selected in the trainer dropdown
   const [notice, setNotice] = useState<string | null>(null) // trainer feedback
@@ -391,7 +392,19 @@ export default function App() {
     setTraining(null)
     setNotice(null)
     setPlayer(color)
+    setFlip(false)
     setFen(gameRef.current.fen())
+  }
+
+  function switchSide() {
+    setPlayer(player === 'w' ? 'b' : 'w')
+    setFlip(false)
+    setSelected(null)
+    setPendingPromo(null)
+    setHintFen(null)
+    setOptionsFen(null)
+    setOptPick(null)
+    setRedoStack([])
   }
 
   function startTraining(lineIndex: number, color: Color) {
@@ -405,6 +418,7 @@ export default function App() {
     setNotice(null)
     setTraining({ line: lineIndex, mistakes: 0 })
     setPlayer(color)
+    setFlip(false)
     setFen(gameRef.current.fen())
   }
 
@@ -604,7 +618,7 @@ export default function App() {
 
   const current = evals[fen]
   const whitePct = current ? winPct(current.cp) : 50
-  const flipped = player === 'b'
+  const flipped = (player === 'b') !== flip
 
   // Pieces each side has captured, cheapest first, plus the material balance.
   const capturedBy = (color: Color) =>
@@ -811,6 +825,22 @@ export default function App() {
                   aria-pressed={editor !== null}
                 >
                   <Icon name="edit" />
+                </button>
+                <button
+                  onClick={() => setFlip(!flip)}
+                  title="Flip board"
+                  aria-label="Flip board"
+                  aria-pressed={flip}
+                >
+                  <Icon name="flip" />
+                </button>
+                <button
+                  onClick={switchSide}
+                  disabled={training !== null || editor !== null}
+                  title="Switch sides: keep the current position and play the other color"
+                  aria-label="Switch sides"
+                >
+                  <Icon name="swap" />
                 </button>
                 <button
                   onClick={() => {
