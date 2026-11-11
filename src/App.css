@@ -573,3 +573,20 @@
 .mv.best, .mv.excellent, .mv.inaccuracy, .mv.mistake, .mv.blunder {
   font-weight: 600;
 }
+
+.mv.pick {
+  cursor: pointer;
+}
+
+.mv.cur {
+  background: rgba(128, 128, 128, 0.25);
+  border-radius: 4px;
+}
+
+.editor .pgn {
+  width: 100%;
+  box-sizing: border-box;
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+  resize: vertical;
+}

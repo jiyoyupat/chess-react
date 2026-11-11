@@ -5,8 +5,10 @@ export type SearchResult = { move: string; score: Score | null; lines?: SearchLi
 
 export class Engine {
   private worker: Worker
-  // FIFO queue: every `go` produces exactly one `bestmove`.
+  // FIFO queue: every `go` produces exactly one `bestmove`. Searches run one at a time.
   private pending: Array<(r: SearchResult) => void> = []
+  private jobs: Array<{ fen: string; ms: number }> = []
+  private running = false
   private lastScore: Score | null = null
   private lines = new Map<number, SearchLine>() // MultiPV index -> latest line
 
@@ -29,6 +31,8 @@ export class Engine {
         const result = { move: line.split(' ')[1], score: this.lastScore, lines }
         this.lastScore = null
         this.pending.shift()?.(result)
+        this.running = false
+        this.pump()
       }
     }
     this.worker.postMessage('uci')
@@ -49,9 +53,19 @@ export class Engine {
   search(fen: string, movetimeMs = 500): Promise<SearchResult> {
     return new Promise((resolve) => {
       this.pending.push(resolve)
-      this.worker.postMessage(`position fen ${fen}`)
-      this.worker.postMessage(`go movetime ${movetimeMs}`)
+      this.jobs.push({ fen, ms: movetimeMs })
+      this.pump()
     })
+  }
+
+  // Start the next queued search only when the engine is idle.
+  private pump() {
+    if (this.running) return
+    const job = this.jobs.shift()
+    if (!job) return
+    this.running = true
+    this.worker.postMessage(`position fen ${job.fen}`)
+    this.worker.postMessage(`go movetime ${job.ms}`)
   }
 
   bestMove(fen: string, movetimeMs = 500): Promise<string> {
@@ -61,5 +75,6 @@ export class Engine {
   terminate() {
     this.worker.terminate()
     this.pending = []
+    this.jobs = []
   }
 }

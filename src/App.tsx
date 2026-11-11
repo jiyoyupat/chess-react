@@ -98,6 +98,15 @@ type Editor = {
 
 const PALETTE_TYPES = ['K', 'Q', 'R', 'B', 'N', 'P']
 
+// An imported game being replayed (PGN import).
+type Review = { moves: Move[]; white: string; black: string; result: string }
+
+function replayTo(moves: Move[], n: number): Chess {
+  const g = new Chess(moves[0].before)
+  for (let i = 0; i < n; i++) g.move({ from: moves[i].from, to: moves[i].to, promotion: moves[i].promotion })
+  return g
+}
+
 /** Rough Elo for a Stockfish Skill Level (0 -> ~1350, 20 -> ~3200), rounded to 50. */
 function approxElo(level: number): number {
   return Math.round((1350 + (level * (3190 - 1350)) / 20) / 50) * 50
@@ -177,13 +186,15 @@ export default function App() {
   const [optionsFen, setOptionsFen] = useState<string | null>(null) // position the move options were requested for
   const [optionsData, setOptionsData] = useState<{ fen: string; items: MoveOption[] } | null>(null)
   const [optPick, setOptPick] = useState<{ fen: string; uci: string } | null>(null)
+  const [review, setReview] = useState<Review | null>(null) // imported game being replayed
+  const [pgnBox, setPgnBox] = useState<{ text: string; error: string | null } | null>(null)
   const scoutRef = useRef<Engine | null>(null) // third engine, MultiPV, created on first use
 
   const game = gameRef.current
   const isOver = game.isGameOver()
-  const hideAnalysis = practice && !isOver // practice mode: analysis is revealed when the game ends
-  const mover = override ? game.turn() : player // whose pieces you can move right now
-  const engineTurn = !isOver && !override && !editor && game.turn() !== player
+  const hideAnalysis = practice && !isOver && !review // practice mode: analysis is revealed when the game ends
+  const mover = override || review ? game.turn() : player // whose pieces you can move right now
+  const engineTurn = !isOver && !override && !editor && !review && game.turn() !== player
   const ply = game.history().length
   const line = training ? LINES[training.line] : null
   const inLine = line !== null && ply < line.moves.length // still following the book line
@@ -283,7 +294,7 @@ export default function App() {
   // Analyze every position not yet evaluated (results are cached per FEN).
   useEffect(() => {
     if (!analyzer) return
-    const g = game.history({ verbose: true })
+    const g = review ? review.moves : game.history({ verbose: true })
     const fens = [g[0]?.before ?? game.fen(), ...g.map((m) => m.after)]
     for (const f of fens) {
       if (requested.current.has(f)) continue
@@ -295,7 +306,7 @@ export default function App() {
       }
       analyzer.search(f, ANALYSIS_MS).then((r) => setEvals((p) => ({ ...p, [f]: toAnalysis(f, r) })))
     }
-  }, [analyzer, fen, game])
+  }, [analyzer, fen, game, review])
 
   // Play a sound only when a move was added (not on undo or new game).
   useEffect(() => {
@@ -317,14 +328,34 @@ export default function App() {
     }
   }, [fen, game, player])
 
-  // Auto-scroll the move list to the bottom on every new move.
+  // Auto-scroll the move list to the bottom on every new move (to the current move while reviewing).
   useEffect(() => {
     const el = sideRef.current
-    if (el) el.scrollTop = el.scrollHeight
-  }, [fen])
+    if (!el) return
+    if (review) el.querySelector('.cur')?.scrollIntoView({ block: 'nearest' })
+    else el.scrollTop = el.scrollHeight
+  }, [fen, review])
+
+  // Review mode: left/right arrows step through the game.
+  useEffect(() => {
+    if (!review || editor) return
+    const onKey = (e: KeyboardEvent) => {
+      const tag = e.target instanceof HTMLElement ? e.target.tagName : ''
+      if (tag === 'INPUT' || tag === 'TEXTAREA' || tag === 'SELECT') return
+      const n = game.history().length
+      if (e.key === 'ArrowLeft') goTo(n - 1)
+      else if (e.key === 'ArrowRight') goTo(n + 1)
+      else if (e.key === 'Home') goTo(0)
+      else if (e.key === 'End') goTo(review.moves.length)
+      else return
+      e.preventDefault()
+    }
+    window.addEventListener('keydown', onKey)
+    return () => window.removeEventListener('keydown', onKey)
+  }, [review, editor, fen])
 
   function tryMove(from: string, to: string, promotion?: PromotionPiece): boolean {
-    if (game.turn() !== mover || isOver) return false
+    if (review || game.turn() !== mover || isOver) return false
     // A pawn reaching the last rank: ask which piece to promote to.
     if (
       !promotion &&
@@ -368,14 +399,14 @@ export default function App() {
 
   // Show move options when a piece starts being dragged, too.
   function onPieceDrag({ square }: { square: string | null }) {
-    if (!square || game.turn() !== mover || isOver) return
+    if (!square || review || game.turn() !== mover || isOver) return
     setSelected(game.get(square as Square)?.color === mover ? square : null)
   }
 
   // Click-to-move: click your own piece, then click the target square.
   function onSquareClick({ square }: { square: string }) {
     setPendingPromo(null) // clicking elsewhere cancels the promotion picker
-    if (game.turn() !== mover || isOver) return
+    if (review || game.turn() !== mover || isOver) return
     if (selected && tryMove(selected, square)) return
     const piece = game.get(square as Square)
     if (piece?.color === mover) setSelected(square)
@@ -384,6 +415,8 @@ export default function App() {
 
   function newGame(color: Color) {
     gameRef.current = new Chess()
+    setReview(null)
+    setPgnBox(null)
     setCustom(false)
     setEditor(null)
     setRedoStack([])
@@ -393,6 +426,53 @@ export default function App() {
     setNotice(null)
     setPlayer(color)
     setFlip(false)
+    setFen(gameRef.current.fen())
+  }
+
+  function goTo(n: number) {
+    if (!review) return
+    const target = Math.max(0, Math.min(review.moves.length, n))
+    gameRef.current = replayTo(review.moves, target)
+    setSelected(null)
+    setFen(gameRef.current.fen())
+  }
+
+  function openReview(text: string) {
+    const g = new Chess()
+    try {
+      g.loadPgn(text)
+    } catch {
+      setPgnBox((b) => b && { ...b, error: 'Could not read this PGN. Paste the full game text including the moves.' })
+      return
+    }
+    const moves = g.history({ verbose: true })
+    if (moves.length === 0) {
+      setPgnBox((b) => b && { ...b, error: 'No moves found in this PGN.' })
+      return
+    }
+    const h = g.getHeaders()
+    const name = (n: string | undefined, elo: string | undefined, fallback: string) =>
+      `${n && n !== '?' ? n : fallback}${elo && elo !== '?' ? ` (${elo})` : ''}`
+    setReview({
+      moves,
+      white: name(h.White, h.WhiteElo, 'White'),
+      black: name(h.Black, h.BlackElo, 'Black'),
+      result: h.Result ?? '*',
+    })
+    setPgnBox(null)
+    setEditor(null)
+    setTraining(null)
+    setNotice(null)
+    setSelected(null)
+    setPendingPromo(null)
+    setHintFen(null)
+    setOptionsFen(null)
+    setOptPick(null)
+    setRedoStack([])
+    setPlayer('w')
+    setFlip(false)
+    setCustom(moves[0].before !== new Chess().fen())
+    gameRef.current = replayTo(moves, 0)
     setFen(gameRef.current.fen())
   }
 
@@ -409,6 +489,8 @@ export default function App() {
 
   function startTraining(lineIndex: number, color: Color) {
     gameRef.current = new Chess()
+    setReview(null)
+    setPgnBox(null)
     setCustom(false)
     setEditor(null)
     setRedoStack([])
@@ -506,6 +588,7 @@ export default function App() {
       // ignore: validated above
     }
     gameRef.current = g
+    setReview(null)
     setCustom(true)
     setEditor(null)
     setSelected(null)
@@ -562,7 +645,7 @@ export default function App() {
   const hintSan = hintBook ?? (hintBest ? uciToSan(fen, hintBest) : null)
   const hintWhy = hintBest ? explainMove(fen, hintBest, hintBook ? undefined : evals[fen]) : []
   // Highlight the opponent's last move (from and to squares).
-  const lastOpp = game.history({ verbose: true }).findLast((m) => m.color !== player)
+  const lastOpp = game.history({ verbose: true }).findLast((m) => review || m.color !== player)
   if (lastOpp) {
     for (const sq of [lastOpp.from, lastOpp.to]) {
       squareStyles[sq] = { backgroundColor: 'rgba(255, 170, 0, 0.5)' }
@@ -609,12 +692,16 @@ export default function App() {
   }
 
   const history = game.history({ verbose: true })
-  const reviews = history.map((m) => {
+  const rate = (m: Move) => {
     const before = evals[m.before]
     const after = evals[m.after]
     if (!before || !after) return null
     return rateMove(m.color, m.from + m.to + (m.promotion ?? ''), before, after)
-  })
+  }
+  const reviews = history.map(rate)
+  // While reviewing an imported game, the move list, accuracy and Elo cover the whole game.
+  const allHistory = review ? review.moves : history
+  const allReviews = review ? allHistory.map(rate) : reviews
 
   const current = evals[fen]
   const whitePct = current ? winPct(current.cp) : 50
@@ -636,7 +723,7 @@ export default function App() {
   let feedback: string | null = null
   let badge: { square: string; rating: Rating | 'pending' } | null = null
   for (let i = history.length - 1; i >= 0; i--) {
-    if (history[i].color !== player) continue
+    if (!review && history[i].color !== player) continue
     const r = reviews[i]
     if (!r) {
       badge = { square: history[i].to, rating: 'pending' } // still analyzing
@@ -654,8 +741,8 @@ export default function App() {
 
   const rows: number[] = []
   // A game that starts with Black to move gets an empty White cell in the first row.
-  const offset = history[0]?.color === 'b' ? 1 : 0
-  for (let i = -offset; i < history.length; i += 2) rows.push(i)
+  const offset = allHistory[0]?.color === 'b' ? 1 : 0
+  for (let i = -offset; i < allHistory.length; i += 2) rows.push(i)
 
   // Last opening matching a position in the history (transpositions match too).
   let opening: Opening | null = null
@@ -668,11 +755,12 @@ export default function App() {
   }
   const outOfBook = opening !== null && openingPly < history.length - 1
   function cell(i: number) {
-    const m = history[i]
+    const m = allHistory[i]
     if (!m) return <td />
-    const r = hideAnalysis ? null : reviews[i]
+    const r = hideAnalysis ? null : allReviews[i]
+    const cls = `${r ? `mv ${r.rating}` : 'mv'}${review ? ' pick' : ''}${review && i === ply - 1 ? ' cur' : ''}`
     return (
-      <td className={r ? `mv ${r.rating}` : 'mv'}>
+      <td className={cls} onClick={review ? () => goTo(i + 1) : undefined}>
         {m.san}
         {r && <sup title={RATINGS[r.rating].label}> {RATINGS[r.rating].symbol}</sup>}
         {!hideAnalysis && <small> {formatEval(evals[m.after])}</small>}
@@ -784,7 +872,7 @@ export default function App() {
               },
               showAnimations: true,
               animationDurationInMs: 250,
-              allowDragging: editor ? true : !isOver && game.turn() === mover && !pendingPromo,
+              allowDragging: editor ? true : !review && !isOver && game.turn() === mover && !pendingPromo,
             }}
           />
         </div>
@@ -793,7 +881,13 @@ export default function App() {
             <div className="info">
               <div className="pinned">
               <p className="status">
-                {engine ? <Rich text={getStatus(game, player, engineTurn, override)} /> : 'Loading engine...'}
+                {review ? (
+                  `Reviewing: move ${ply} of ${review.moves.length}`
+                ) : engine ? (
+                  <Rich text={getStatus(game, player, engineTurn, override)} />
+                ) : (
+                  'Loading engine...'
+                )}
               </p>
               <div className="controls iconbar">
                 <button onClick={() => newGame('w')} title="New game as White" aria-label="Play as White">
@@ -804,7 +898,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={undo}
-                  disabled={history.length < (override ? 1 : 2)}
+                  disabled={review !== null || history.length < (override ? 1 : 2)}
                   title="Undo"
                   aria-label="Undo"
                 >
@@ -812,7 +906,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={redo}
-                  disabled={redoStack.length === 0}
+                  disabled={review !== null || redoStack.length === 0}
                   title="Redo"
                   aria-label="Redo"
                 >
@@ -841,6 +935,14 @@ export default function App() {
                   aria-label="Switch sides"
                 >
                   <Icon name="swap" />
+                </button>
+                <button
+                  onClick={() => setPgnBox(pgnBox ? null : { text: '', error: null })}
+                  title="Import PGN: replay a game from Chess.com or Lichess"
+                  aria-label="Import PGN"
+                  aria-pressed={pgnBox !== null}
+                >
+                  <Icon name="file" />
                 </button>
                 <button
                   onClick={() => {
@@ -909,6 +1011,59 @@ export default function App() {
                 </label>
               </div>
               </div>
+              {pgnBox && (
+                <div className="editor">
+                  <strong>Import PGN</strong>
+                  <p>Paste a game from Chess.com or Lichess to replay it with move ratings.</p>
+                  <textarea
+                    className="pgn"
+                    rows={6}
+                    value={pgnBox.text}
+                    placeholder="1. e4 e5 2. Nf3 Nc6 ..."
+                    onChange={(e) => setPgnBox({ text: e.target.value, error: null })}
+                  />
+                  <div className="controls">
+                    <button onClick={() => openReview(pgnBox.text)} disabled={!pgnBox.text.trim()}>
+                      Load game
+                    </button>
+                    <button onClick={() => setPgnBox(null)}>Cancel</button>
+                  </div>
+                  {pgnBox.error && <p className="notice">{pgnBox.error}</p>}
+                </div>
+              )}
+              {review && (
+                <div className="editor">
+                  <strong>Game review</strong>
+                  <p>
+                    {review.white} vs {review.black} · {review.result}
+                  </p>
+                  <div className="controls">
+                    <button onClick={() => goTo(0)} disabled={ply === 0} title="First position" aria-label="First position">
+                      «
+                    </button>
+                    <button onClick={() => goTo(ply - 1)} disabled={ply === 0} title="Previous move" aria-label="Previous move">
+                      ‹
+                    </button>
+                    <button
+                      onClick={() => goTo(ply + 1)}
+                      disabled={ply === review.moves.length}
+                      title="Next move"
+                      aria-label="Next move"
+                    >
+                      ›
+                    </button>
+                    <button
+                      onClick={() => goTo(review.moves.length)}
+                      disabled={ply === review.moves.length}
+                      title="Last position"
+                      aria-label="Last position"
+                    >
+                      »
+                    </button>
+                    <button onClick={() => newGame(player)}>Exit review</button>
+                  </div>
+                </div>
+              )}
               {editor && (
                 <div className="editor">
                   <strong>Edit board</strong>
@@ -1089,19 +1244,19 @@ export default function App() {
                     <div className="statrow">
                       <span className="statlabel">Accuracy</span>
                       <span>
-                        White <b className="stat">{averageAccuracy(reviews, history, 'w')}</b>
+                        White <b className="stat">{averageAccuracy(allReviews, allHistory, 'w')}</b>
                       </span>
                       <span>
-                        Black <b className="stat">{averageAccuracy(reviews, history, 'b')}</b>
+                        Black <b className="stat">{averageAccuracy(allReviews, allHistory, 'b')}</b>
                       </span>
                     </div>
                     <div className="statrow">
                       <span className="statlabel">Est. Elo</span>
                       <span>
-                        White <b className="stat">{estimateElo(evals, history, 'w')}</b>
+                        White <b className="stat">{estimateElo(evals, allHistory, 'w')}</b>
                       </span>
                       <span>
-                        Black <b className="stat">{estimateElo(evals, history, 'b')}</b>
+                        Black <b className="stat">{estimateElo(evals, allHistory, 'b')}</b>
                       </span>
                     </div>
                   </>
