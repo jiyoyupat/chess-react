@@ -545,8 +545,8 @@ export default function App() {
   }
 
   const squareStyles: Record<string, React.CSSProperties> = {}
-  const showHint = hintFen === fen && !isOver && game.turn() === player
-  const threats = showHint ? findThreats(game, player) : []
+  const showHint = hintFen === fen && !isOver && game.turn() === mover
+  const threats = showHint ? findThreats(game, mover) : []
   const hintBook = showHint && inLine && line ? line.moves[ply] : null
   let hintBest: string | null = null
   if (hintBook) {
@@ -583,7 +583,7 @@ export default function App() {
   const arrows = hintBest
     ? [{ startSquare: hintBest.slice(0, 2), endSquare: hintBest.slice(2, 4), color: 'rgba(59, 130, 246, 0.85)' }]
     : []
-  const showOptions = optionsFen === fen && !isOver && game.turn() === player
+  const showOptions = optionsFen === fen && !isOver && game.turn() === mover
   const optItems = optionsData?.fen === fen ? optionsData.items : null
   const picked = showOptions && optPick?.fen === fen ? optItems?.find((o) => o.uci === optPick.uci) : undefined
   if (picked) {
@@ -856,7 +856,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setHintFen(showHint ? null : fen)}
-                  disabled={isOver || game.turn() !== player}
+                  disabled={isOver || game.turn() !== mover}
                   title={showHint ? 'Hide hint' : 'Hint'}
                   aria-label="Hint"
                   aria-pressed={showHint}
@@ -875,7 +875,7 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setOptionsFen(showOptions ? null : fen)}
-                  disabled={isOver || game.turn() !== player || editor !== null}
+                  disabled={isOver || game.turn() !== mover || editor !== null}
                   title="Move options: sample moves from best to blunder"
                   aria-label="Move options"
                   aria-pressed={showOptions}
