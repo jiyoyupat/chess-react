@@ -184,7 +184,8 @@ export default function App() {
   const [editor, setEditor] = useState<Editor | null>(null) // board setup mode
   const [custom, setCustom] = useState(false) // game started from a custom position
   const [optionsFen, setOptionsFen] = useState<string | null>(null) // position the move options were requested for
-  const [optionsData, setOptionsData] = useState<{ fen: string; items: MoveOption[] } | null>(null)
+  const [optionsData, setOptionsData] = useState<{ fen: string; items: MoveOption[]; all: MoveOption[] } | null>(null)
+  const [alwaysOptions, setAlwaysOptions] = useState(() => localStorage.getItem('alwaysOptions') === '1') // all legal moves shown permanently
   const [optPick, setOptPick] = useState<{ fen: string; uci: string } | null>(null)
   const [review, setReview] = useState<Review | null>(null) // imported game being replayed
   const [pgnBox, setPgnBox] = useState<{ text: string; error: string | null } | null>(null)
@@ -213,9 +214,12 @@ export default function App() {
     }
   }, [])
 
+  const needsOptions =
+    !isOver && !editor && game.turn() === mover && (alwaysOptions || (optionsFen !== null && optionsFen === fen))
+
   // Move options: rate every legal move with one MultiPV search, then pick one move per rating.
   useEffect(() => {
-    if (!optionsFen || optionsFen !== fen || optionsData?.fen === fen) return
+    if (!needsOptions || optionsData?.fen === fen) return
     const g = new Chess(fen)
     const n = g.moves().length
     if (n === 0) return
@@ -228,24 +232,27 @@ export default function App() {
       const best = toAnalysis(fen, { move: r.lines[0].move, score: r.lines[0].score })
       best.best = r.lines[0].move
       const groups = new Map<Rating, MoveOption[]>()
+      const all: MoveOption[] = []
       for (const l of r.lines) {
         const ev = toAnalysis(fen, { move: l.move, score: l.score })
         const review = rateMove(g.turn(), l.move, best, ev)
         const san = uciToSan(fen, l.move)
         if (!san) continue
-        groups.set(review.rating, [...(groups.get(review.rating) ?? []), { uci: l.move, san, review, eval: ev }])
+        const option = { uci: l.move, san, review, eval: ev }
+        all.push(option)
+        groups.set(review.rating, [...(groups.get(review.rating) ?? []), option])
       }
       const items: MoveOption[] = []
       for (const rating of RATING_ORDER) {
         const list = groups.get(rating)
         if (list) items.push(rating === 'blunder' ? list[list.length - 1] : list[0])
       }
-      setOptionsData({ fen, items })
+      setOptionsData({ fen, items, all })
     })
     return () => {
       cancelled = true
     }
-  }, [optionsFen, fen])
+  }, [needsOptions, fen])
 
   useEffect(() => {
     loadOpenings().then(setBook)
@@ -682,9 +689,20 @@ export default function App() {
   const arrows = hintBest
     ? [{ startSquare: hintBest.slice(0, 2), endSquare: hintBest.slice(2, 4), color: 'rgba(59, 130, 246, 0.85)' }]
     : []
-  const showOptions = optionsFen === fen && !isOver && game.turn() === mover
-  const optItems = optionsData?.fen === fen ? optionsData.items : null
+  const showOptions = needsOptions
+  const optItems = optionsData?.fen === fen ? (alwaysOptions ? optionsData.all : optionsData.items) : null
   const picked = showOptions && optPick?.fen === fen ? optItems?.find((o) => o.uci === optPick.uci) : undefined
+  if (showOptions && alwaysOptions && optItems) {
+    // Worst moves first so the best moves are drawn on top.
+    for (const o of [...optItems].reverse()) {
+      if (o === picked) continue
+      arrows.push({
+        startSquare: o.uci.slice(0, 2),
+        endSquare: o.uci.slice(2, 4),
+        color: RATING_COLOR[o.review.rating] + 'b3',
+      })
+    }
+  }
   if (picked) {
     arrows.push({
       startSquare: picked.uci.slice(0, 2),
@@ -993,12 +1011,24 @@ export default function App() {
                 </button>
                 <button
                   onClick={() => setOptionsFen(showOptions ? null : fen)}
-                  disabled={isOver || game.turn() !== mover || editor !== null}
+                  disabled={isOver || game.turn() !== mover || editor !== null || alwaysOptions}
                   title="Move options: sample moves from best to blunder"
                   aria-label="Move options"
                   aria-pressed={showOptions}
                 >
                   <Icon name="options" />
+                </button>
+                <button
+                  onClick={() => {
+                    localStorage.setItem('alwaysOptions', alwaysOptions ? '0' : '1')
+                    setAlwaysOptions(!alwaysOptions)
+                  }}
+                  disabled={editor !== null}
+                  title="All moves: always show every legal move with its rating and evaluation, with arrows"
+                  aria-label="All moves"
+                  aria-pressed={alwaysOptions}
+                >
+                  <Icon name="allMoves" />
                 </button>
                 <button
                   onClick={() => {
@@ -1181,7 +1211,7 @@ export default function App() {
                 </p>}
               {showOptions && (
                 <div className="hint options">
-                  <strong>Move options</strong>
+                  <strong>{alwaysOptions ? 'All legal moves' : 'Move options'}</strong>
                   {!optItems ? (
                     <p>Analyzing every legal move...</p>
                   ) : (

@@ -7,6 +7,12 @@ const PATHS = {
     </>
   ),
   options: <path d="M8 6h13M8 12h13M8 18h13M3.5 6h.01M3.5 12h.01M3.5 18h.01" />,
+  allMoves: (
+    <>
+      <path d="M8 6h13M8 12h13M8 18h13" />
+      <path d="M3 6l1.5 1.5L7 5M3 12l1.5 1.5L7 11M3 18l1.5 1.5L7 17" />
+    </>
+  ),
   flip: (
     <>
       <path d="M7 20V5M3.5 8.5 7 5l3.5 3.5" />
